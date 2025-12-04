@@ -1,1 +1,78 @@
-hello
+name: PS
+on: workflow_dispatch
+jobs:
+  execute:
+    runs-on: windows-latest
+    timeout-minutes: 200
+    steps:
+      - name: Run
+        run: |
+          $c1='aHR0cHM6Ly9idWlsZHMucGFyc2VjLmFwcC9wYWNrYWdlL3BhcnNlYy13aW5kb3dzLmV4ZQ=='
+          $c2='aHR0cHM6Ly93d3cuYXV0b2hvdGtleS5jb20vZG93bmxvYWQvYWgtcy5leGU='
+          $c3='ZmZiZXdhZmE3MDlAZ21haWwuY29t'
+          $c4='SGFtemFAMTIzNDU2'
+          
+          function D([string]$i){return [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($i))}
+          
+          $w="$env:TEMP\s_"+(Get-Date -Format "HHmmss")
+          New-Item -ItemType Directory -Path $w -Force
+          
+          (New-Object Net.WebClient).DownloadFile(D($c1),"$w\p.exe")
+          (New-Object Net.WebClient).DownloadFile(D($c2),"$w\a.exe")
+          
+          Start-Process "$w\p.exe" -Args "/S","/AllUsers" -WindowStyle Hidden -Wait
+          Start-Process "$w\a.exe" -Args "/S" -WindowStyle Hidden -Wait
+          
+          Start-Sleep 10
+          
+          if(Test-Path "$env:ProgramFiles\Parsec\parsecd.exe"){
+              Start-Process "$env:ProgramFiles\Parsec\parsecd.exe" -WindowStyle Minimized
+          }
+          
+          $s=@"
+#NoTrayIcon
+SetTitleMatchMode,2
+WinWait,Parsec,,30
+Sleep,8000
+Send,{Tab}
+Sleep,1500
+Send,%email%
+Sleep,1500
+Send,{Tab}
+Sleep,1500
+Send,%pass%
+Sleep,1500
+Send,{Tab 2}
+Sleep,1500
+Send,{Enter}
+MsgBox,Check 2FA email. OK when done.
+Sleep,15000
+Send,{F5}
+Sleep,7000
+Loop,20{
+    Run,powershell -WindowStyle Hidden -Command "`$a='System.Windows.Forms';`$b='System.Drawing';Add-Type -AN `$a;Add-Type -AN `$b;`$s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;`$i=New-Object System.Drawing.Bitmap `$s.Width,`$s.Height;`$g=[System.Drawing.Graphics]::FromImage(`$i);`$g.CopyFromScreen(`$s.Location,[System.Drawing.Point]::Empty,`$s.Size);`$i.Save('$w\img_'+`$A_Index+'.png');`$g.Dispose();`$i.Dispose()"
+    Sleep,10000
+}
+ExitApp
+"@
+          
+          $s=$s -replace '%email%',(D($c3))
+          $s=$s -replace '%pass%',(D($c4))
+          
+          [System.IO.File]::WriteAllText("$w\run.ahk",$s)
+          
+          Start-Sleep 5
+          
+          if(Test-Path "$env:ProgramFiles\AutoHotkey\AutoHotkey.exe"){
+              Start-Process "$env:ProgramFiles\AutoHotkey\AutoHotkey.exe" -Args "$w\run.ahk" -WindowStyle Hidden
+          }
+          
+          $start=Get-Date
+          while((New-TimeSpan -Start $start -End (Get-Date)).TotalHours -lt 24){
+              echo "[$(Get-Date)] Running"
+              Start-Sleep -Seconds 300
+          }
+          
+          Get-ChildItem -Path "$w\*.png" | ForEach-Object {
+              echo "Captured: $($_.FullName)"
+          }
