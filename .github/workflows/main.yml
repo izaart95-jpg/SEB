@@ -3,77 +3,228 @@ on: workflow_dispatch
 jobs:
   execute:
     runs-on: windows-latest
-    timeout-minutes: 199
+    timeout-minutes: 144
     steps:
-      - name: Run
+      - name: Setup Environment
         run: |
-          $c1='aHR0cHM6Ly9idWlsZHMucGFyc2VjLmFwcC9wYWNrYWdlL3BhcnNlYy13aW5kb3dzLmV4ZQ=='
-          $c2='aHR0cHM6Ly93d3cuYXV0b2hvdGtleS5jb20vZG93bmxvYWQvYWgtcy5leGU='
-          $c3='ZmZiZXdhZmE3MDlAZ21haWwuY29t'
-          $c4='SGFtemFAMTIzNDU2'
-          
-          function D([string]$i){return [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($i))}
-          
-          $w="$env:TEMP\s_"+(Get-Date -Format "HHmmss")
-          New-Item -ItemType Directory -Path $w -Force
-          
-          (New-Object Net.WebClient).DownloadFile(D($c1),"$w\p.exe")
-          (New-Object Net.WebClient).DownloadFile(D($c2),"$w\a.exe")
-          
-          Start-Process "$w\p.exe" -Args "/S","/AllUsers" -WindowStyle Hidden -Wait
-          Start-Process "$w\a.exe" -Args "/S" -WindowStyle Hidden -Wait
-          
-          Start-Sleep 10
-          
-          if(Test-Path "$env:ProgramFiles\Parsec\parsecd.exe"){
-              Start-Process "$env:ProgramFiles\Parsec\parsecd.exe" -WindowStyle Minimized
+          # Decode function
+          function Decode-B64 {
+              param([string]$input)
+              return [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($input))
           }
           
-          $ahkScript = @'
+          # Decoded values
+          $parsecUrl = Decode-B64 'aHR0cHM6Ly9idWlsZHMucGFyc2VjLmFwcC9wYWNrYWdlL3BhcnNlYy13aW5kb3dzLmV4ZQ=='
+          $ahkUrl = Decode-B64 'aHR0cHM6Ly93d3cuYXV0b2hvdGtleS5jb20vZG93bmxvYWQvYW5rLWluc3RhbGwuZXhl'
+          $email = Decode-B64 'ZmZiZXdhZmE3MDlAZ21haWwuY29t'
+          $password = Decode-B64 'SGFtemFAMTIzNDU2'
+          
+          # Create working directory
+          $workDir = "$env:TEMP\parsec_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+          New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+          
+          # Set environment variables
+          echo "WORK_DIR=$workDir" >> $env:GITHUB_ENV
+          echo "EMAIL=$email" >> $env:GITHUB_ENV
+          echo "PASSWORD=$password" >> $env:GITHUB_ENV
+
+      - name: Download and Install Software
+        run: |
+          # Download Parsec
+          $parsecInstaller = "$env:WORK_DIR\parsec.exe"
+          Invoke-WebRequest -Uri 'https://builds.parsec.app/package/parsec-windows.exe' -OutFile $parsecInstaller
+          
+          # Download AutoHotkey
+          $ahkInstaller = "$env:WORK_DIR\autohotkey.exe"
+          Invoke-WebRequest -Uri 'https://www.autohotkey.com/download/ahk-install.exe' -OutFile $ahkInstaller
+          
+          # Install Parsec (silent, system-wide)
+          Write-Host "Installing Parsec..."
+          Start-Process -FilePath $parsecInstaller -ArgumentList "/S /AllUsers" -Wait -NoNewWindow
+          
+          # Install AutoHotkey
+          Write-Host "Installing AutoHotkey..."
+          Start-Process -FilePath $ahkInstaller -ArgumentList "/S" -Wait -NoNewWindow
+          
+          # Wait for installations to complete
+          Start-Sleep -Seconds 10
+
+      - name: Start Parsec
+        run: |
+          # Start Parsec
+          $parsecPath = "$env:ProgramFiles\Parsec\parsecd.exe"
+          if (Test-Path $parsecPath) {
+              Write-Host "Starting Parsec..."
+              Start-Process -FilePath $parsecPath -WindowStyle Minimized
+          } else {
+              Write-Host "Parsec not found at: $parsecPath"
+              # Try alternative location
+              $parsecPath = "${env:ProgramFiles(x86)}\Parsec\parsecd.exe"
+              if (Test-Path $parsecPath) {
+                  Start-Process -FilePath $parsecPath -WindowStyle Minimized
+              }
+          }
+          
+          # Wait for Parsec to initialize
+          Write-Host "Waiting for Parsec to initialize..."
+          Start-Sleep -Seconds 15
+
+      - name: Create Automation Script
+        run: |
+          # Create AHK script
+          $ahkScript = @"
 #NoTrayIcon
-SetTitleMatchMode,2
-WinWait,Parsec,,30
-Sleep,8000
-Send,{Tab}
-Sleep,1500
-Send,EMAIL_PLACEHOLDER
-Sleep,1500
-Send,{Tab}
-Sleep,1500
-Send,PASSWORD_PLACEHOLDER
-Sleep,1500
-Send,{Tab 2}
-Sleep,1500
-Send,{Enter}
-MsgBox,Check 2FA email. OK when done.
-Sleep,15000
-Send,{F5}
-Sleep,7000
-Loop,20{
-    Run,powershell -WindowStyle Hidden -Command "$a='System.Windows.Forms';$b='System.Drawing';Add-Type -AN $a;Add-Type -AN $b;$s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;$i=New-Object System.Drawing.Bitmap $s.Width,$s.Height;$g=[System.Drawing.Graphics]::FromImage($i);$g.CopyFromScreen($s.Location,[System.Drawing.Point]::Empty,$s.Size);$i.Save('WORKDIR\img_'+$A_Index+'.png');$g.Dispose();$i.Dispose()"
-    Sleep,10000
+SetTitleMatchMode, 2
+
+; Wait for Parsec window
+WinWait, Parsec,, 45
+if ErrorLevel
+{
+    MsgBox, Parsec window not found!
+    ExitApp
 }
+
+; Wait for UI to load
+Sleep, 8000
+
+; Tab to email field and enter email
+Send, {Tab}
+Sleep, 1500
+Send, $env:EMAIL
+Sleep, 1500
+
+; Tab to password field and enter password
+Send, {Tab}
+Sleep, 1500
+Send, $env:PASSWORD
+Sleep, 1500
+
+; Tab to Login button and press Enter
+Send, {Tab}
+Sleep, 500
+Send, {Tab}
+Sleep, 500
+Send, {Enter}
+
+; Wait for manual 2FA approval
+MsgBox, 64, Action Required, Please check email for 2FA code and approve login.`nClick OK after you've approved.
+
+; Wait for login to complete
+Sleep, 15000
+
+; Press F5 to refresh/reload
+Send, {F5}
+Sleep, 7000
+
+; Take periodic screenshots
+Loop, 20
+{
+    ; Take screenshot
+    RunWait, powershell -WindowStyle Hidden -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        `$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        `$bitmap = New-Object System.Drawing.Bitmap `$screen.Width, `$screen.Height
+        `$graphics = [System.Drawing.Graphics]::FromImage(`$bitmap)
+        `$graphics.CopyFromScreen(`$screen.Location, [System.Drawing.Point]::Empty, `$screen.Size)
+        `$bitmap.Save('$env:WORK_DIR\screenshot_' + `$A_Index + '.png', [System.Drawing.Imaging.ImageFormat]::Png)
+        `$graphics.Dispose()
+        `$bitmap.Dispose()
+    }"
+    
+    Sleep, 10000 ; Wait 10 seconds between screenshots
+}
+
+MsgBox, Automation sequence complete. Parsec will continue running.
 ExitApp
-'@
+"@
           
-          $ahkScript = $ahkScript -replace 'EMAIL_PLACEHOLDER',(D($c3))
-          $ahkScript = $ahkScript -replace 'PASSWORD_PLACEHOLDER',(D($c4))
-          $ahkScript = $ahkScript -replace 'WORKDIR',$w
-          
-          [System.IO.File]::WriteAllText("$w\run.ahk",$ahkScript)
-          
-          Start-Sleep 5
-          
-          if(Test-Path "$env:ProgramFiles\AutoHotkey\AutoHotkey.exe"){
-              Start-Process "$env:ProgramFiles\AutoHotkey\AutoHotkey.exe" -Args "$w\run.ahk" -WindowStyle Hidden
+          # Save AHK script
+          $scriptPath = "$env:WORK_DIR\automation.ahk"
+          Set-Content -Path $scriptPath -Value $ahkScript
+          echo "SCRIPT_PATH=$scriptPath" >> $env:GITHUB_ENV
+
+      - name: Run Automation
+        run: |
+          # Run AutoHotkey script
+          $ahkPath = "$env:ProgramFiles\AutoHotkey\AutoHotkey.exe"
+          if (Test-Path $ahkPath) {
+              Write-Host "Starting automation script..."
+              Start-Process -FilePath $ahkPath -ArgumentList $env:SCRIPT_PATH -WindowStyle Hidden
+          } else {
+              Write-Host "AutoHotkey not found. Trying alternative location..."
+              $ahkPath = "${env:ProgramFiles(x86)}\AutoHotkey\AutoHotkey.exe"
+              if (Test-Path $ahkPath) {
+                  Start-Process -FilePath $ahkPath -ArgumentList $env:SCRIPT_PATH -WindowStyle Hidden
+              } else {
+                  Write-Host "AutoHotkey not found. Manual interaction required."
+              }
           }
           
-          $start=Get-Date
-          while((New-TimeSpan -Start $start -End (Get-Date)).TotalHours -lt 24){
-              echo "[$(Get-Date)] Running"
-              Start-Sleep -Seconds 300
+          # Wait for automation to start
+          Start-Sleep -Seconds 30
+
+      - name: Monitor and Keep Alive
+        run: |
+          Write-Host "=== Parsec Monitoring Started ==="
+          Write-Host "Workflow will run for 24 hours"
+          Write-Host "Check artifacts for screenshots"
+          Write-Host "================================"
+          
+          $startTime = Get-Date
+          $screenshotCount = 0
+          
+          while ((New-TimeSpan -Start $startTime -End (Get-Date)).TotalHours -lt 24) {
+              # Take occasional screenshots
+              if (($screenshotCount % 12) -eq 0) {
+                  $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+                  $screenshotPath = "$env:WORK_DIR\monitor_$timestamp.png"
+                  
+                  Add-Type -AssemblyName System.Windows.Forms
+                  Add-Type -AssemblyName System.Drawing
+                  
+                  $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+                  $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+                  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+                  $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
+                  $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
+                  $graphics.Dispose()
+                  $bitmap.Dispose()
+                  
+                  Write-Host "Monitor screenshot: $screenshotPath"
+              }
+              
+              # Keep Parsec running
+              $parsecProcess = Get-Process -Name "parsecd" -ErrorAction SilentlyContinue
+              if (-not $parsecProcess) {
+                  Write-Host "Parsec not running, attempting to restart..."
+                  $parsecPath = "$env:ProgramFiles\Parsec\parsecd.exe"
+                  if (Test-Path $parsecPath) {
+                      Start-Process -FilePath $parsecPath -WindowStyle Minimized
+                  }
+              }
+              
+              $screenshotCount++
+              Write-Host "[$(Get-Date)] Active - Hour $((New-TimeSpan -Start $startTime -End (Get-Date)).TotalHours.ToString('F2')) of 24"
+              Start-Sleep -Seconds 300  # Sleep for 5 minutes
           }
           
-          Get-ChildItem -Path "$w\*.png" | ForEach-Object {
-              echo "Captured: $($_.FullName)"
-          }
+          Write-Host "24-hour limit reached. Workflow completed."
+
+      - name: Upload Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parsec-screenshots
+          path: ${{ env.WORK_DIR }}/*.png
+          retention-days: 1
+
+      - name: Cleanup
+        if: always()
+        run: |
+          Write-Host "Cleaning up..."
+          # Kill Parsec processes
+          Get-Process -Name "parsecd", "Parsec" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          # Kill AutoHotkey processes
+          Get-Process -Name "AutoHotkey" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Write-Host "Cleanup completed"
