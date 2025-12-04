@@ -1,168 +1,331 @@
-name: Parsec Screenshot Workflow
+name: Parsec Screenshot Debug Workflow
 
 on:
   workflow_dispatch:
 
 jobs:
-  parsec-screenshot:
+  parsec-debug:
     runs-on: windows-latest
-    timeout-minutes: 280  # 48 hours (2 days)
+    timeout-minutes: 60
 
     steps:
+      - name: Check current state
+        run: |
+          Write-Host "=== SYSTEM INFORMATION ==="
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
+          Write-Host "TEMP: $env:TEMP"
+          Write-Host "USER: $env:USERNAME"
+          Write-Host "=== DISK SPACE ==="
+          Get-PSDrive -PSProvider FileSystem
+          Write-Host "=== PROCESSES ==="
+          Get-Process | Where-Object { $_.ProcessName -like "*parsec*" -or $_.ProcessName -like "*install*" } | Format-Table -AutoSize
+
       - name: Download Parsec installer
         run: |
+          Write-Host "Downloading Parsec installer..."
           $parsecUrl = "https://builds.parsec.app/package/parsec-windows.exe"
           $parsecInstaller = "$env:TEMP\parsec-installer.exe"
-          Invoke-WebRequest -Uri $parsecUrl -OutFile $parsecInstaller
+          Invoke-WebRequest -Uri $parsecUrl -OutFile $parsecInstaller -Verbose
           echo "PARSEC_INSTALLER=$parsecInstaller" >> $env:GITHUB_ENV
+          
+          # Verify download
+          if (Test-Path $parsecInstaller) {
+              $fileSize = (Get-Item $parsecInstaller).Length / 1MB
+              Write-Host "✓ Parsec installer downloaded: $parsecInstaller ($($fileSize.ToString('0.00')) MB)"
+          } else {
+              Write-Host "✗ Failed to download Parsec installer"
+          }
 
-      - name: Download NirCmd for screenshots
+      - name: Download NirCmd
         run: |
+          Write-Host "Downloading NirCmd..."
           $nircmdUrl = "https://www.nirsoft.net/utils/nircmd.zip"
           $nircmdZip = "$env:TEMP\nircmd.zip"
-          $nircmdDir = "$env:TEMP\nircmd"
+          $nircmdExe = "$env:TEMP\nircmd.exe"
           
-          Invoke-WebRequest -Uri $nircmdUrl -OutFile $nircmdZip
-          Expand-Archive -Path $nircmdZip -DestinationPath $nircmdDir -Force
-          Copy-Item "$nircmdDir\nircmd.exe" "$env:TEMP\nircmd.exe"
+          # Try multiple sources if first fails
+          try {
+              Invoke-WebRequest -Uri $nircmdUrl -OutFile $nircmdZip -Verbose
+              Expand-Archive -Path $nircmdZip -DestinationPath "$env:TEMP\nircmd_temp" -Force
+              $nircmdExe = Get-ChildItem -Path "$env:TEMP\nircmd_temp" -Filter "nircmd.exe" -Recurse | Select-Object -First 1 -ExpandProperty FullName
+              Copy-Item $nircmdExe "$env:TEMP\nircmd.exe" -Force
+          } catch {
+              Write-Host "Primary source failed, trying alternative..."
+              # Alternative download
+              $altUrl = "https://raw.githubusercontent.com/actions/virtual-environments/main/images/win/scripts/Helpers/nircmd.exe"
+              Invoke-WebRequest -Uri $altUrl -OutFile "$env:TEMP\nircmd.exe" -Verbose
+          }
+          
+          # Test NirCmd
+          if (Test-Path "$env:TEMP\nircmd.exe") {
+              Write-Host "✓ NirCmd available at: $env:TEMP\nircmd.exe"
+              & "$env:TEMP\nircmd.exe" cmdhelp > "$env:TEMP\nircmd_test.txt"
+              Write-Host "NirCmd test successful"
+          } else {
+              Write-Host "✗ NirCmd download failed"
+          }
+          
           echo "NIRCMD_PATH=$env:TEMP\nircmd.exe" >> $env:GITHUB_ENV
 
-      - name: Create working directory
+      - name: Create and verify working directory
         run: |
-          $workDir = "$env:GITHUB_WORKSPACE\parsec-screenshots"
-          New-Item -ItemType Directory -Path $workDir -Force
+          # Create absolute path
+          $workDir = "D:\a\SEB\SEB\parsec-debug"
+          New-Item -ItemType Directory -Path $workDir -Force -Verbose
+          
+          # Verify creation
+          Write-Host "Created directory: $workDir"
+          Write-Host "Directory exists: $(Test-Path $workDir)"
+          Write-Host "Full path: $(Resolve-Path $workDir -ErrorAction SilentlyContinue)"
+          
+          # Set as current directory
+          Set-Location $workDir
+          Write-Host "Now in: $(Get-Location)"
+          
           echo "WORK_DIR=$workDir" >> $env:GITHUB_ENV
+          echo "CURRENT_DIR=$(Get-Location)" >> $env:GITHUB_ENV
 
-      - name: Install Parsec (Silent System Install)
+      - name: Test screenshot before install
         run: |
-          Write-Host "Installing Parsec system-wide..."
-          # Using silent installation flags for system-wide install
-          # The /S flag is typically for silent install, /ALLUSERS for system-wide
-          Start-Process -FilePath $env:PARSEC_INSTALLER -ArgumentList "/S", "/ALLUSERS" -Wait
-          Write-Host "Installation completed. Waiting for Parsec to start..."
-          Start-Sleep -Seconds 15
-
-      - name: Wait for Parsec to initialize
-        run: |
-          Write-Host "Waiting for Parsec to fully initialize..."
-          Start-Sleep -Seconds 30
-          
-          # Take initial screenshot to see Parsec window
-          & $env:NIRCMD_PATH savescreenshot full "$env:WORK_DIR\parsec_initial.png"
-          Write-Host "Initial screenshot taken"
-
-      - name: Take screenshot before login
-        run: |
-          Write-Host "Taking screenshot of Parsec login screen..."
-          & $env:NIRCMD_PATH savescreenshot full "$env:WORK_DIR\parsec_login_screen.png"
-          Write-Host "Login screen screenshot saved"
-
-      - name: Display instructions for manual 2FA
-        run: |
-          Write-Host "=========================================="
-          Write-Host "MANUAL STEP REQUIRED:"
-          Write-Host "1. Check email ffbewafa709@gmail.com for 2FA code"
-          Write-Host "2. The workflow will wait 60 seconds for you to get the code"
-          Write-Host "3. After 60 seconds, it will continue automatically"
-          Write-Host "=========================================="
-          Start-Sleep -Seconds 60
-
-      - name: Take screenshot after 2FA wait
-        run: |
-          Write-Host "Taking screenshot after 2FA wait..."
-          & $env:NIRCMD_PATH savescreenshot full "$env:WORK_DIR\parsec_post_2fa_wait.png"
-          Write-Host "Post-2FA screenshot saved"
-          
-          # Additional wait for login to complete
-          Write-Host "Waiting for login to process..."
-          Start-Sleep -Seconds 10
-
-      - name: Click Share button using NirCmd
-        run: |
-          Write-Host "Attempting to find and click Share button..."
-          
-          # First, let's activate the Parsec window
-          # Find Parsec window
-          $parsecWindow = Get-Process | Where-Object { $_.ProcessName -like "*parsec*" -or $_.MainWindowTitle -like "*Parsec*" }
-          
-          if ($parsecWindow) {
-              Write-Host "Found Parsec process: $($parsecWindow.ProcessName)"
-              
-              # Take screenshot before clicking
-              & $env:NIRCMD_PATH savescreenshot full "$env:WORK_DIR\before_share_click.png"
-              
-              # Wait for UI to be ready
-              Start-Sleep -Seconds 5
-              
-              # Take screenshot after wait
-              & $env:NIRCMD_PATH savescreenshot full "$env:WORK_DIR\after_reload_wait.png"
-              
-              Write-Host "Share button click attempted via coordinates (this might need adjustment)"
-          } else {
-              Write-Host "Parsec window not found, taking full screenshot"
-          }
-          
-          # Take final screenshot regardless
-          & $env:NIRCMD_PATH savescreenshot full "$env:WORK_DIR\final_attempt.png"
-
-      - name: Alternative method - Multiple screenshots
-        run: |
-          Write-Host "Taking multiple screenshots to capture UI state..."
-          
-          # Take screenshots at intervals
-          for ($i = 1; $i -le 10; $i++) {
-              $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-              $screenshotPath = "$env:WORK_DIR\parsec_ui_${i}_${timestamp}.png"
-              & $env:NIRCMD_PATH savescreenshot full $screenshotPath
-              Write-Host "Screenshot $i taken: $screenshotPath"
-              Start-Sleep -Seconds 3
-          }
-
-      - name: Verify and list all screenshots
-        run: |
+          Write-Host "=== TEST SCREENSHOT BEFORE INSTALL ==="
           Write-Host "Current directory: $(Get-Location)"
-          Write-Host "Screenshots in $env:WORK_DIR:"
-          Get-ChildItem -Path "$env:WORK_DIR\*.png" | ForEach-Object {
-              Write-Host "  - $($_.Name) (Size: $($_.Length/1KB) KB)"
+          Write-Host "NirCmd path: $env:NIRCMD_PATH"
+          Write-Host "Test file path: $(Get-Location)\test_before.png"
+          
+          # Test NirCmd
+          if (Test-Path $env:NIRCMD_PATH) {
+              Write-Host "NirCmd exists, attempting screenshot..."
+              & $env:NIRCMD_PATH savescreenshot full "test_before.png"
+              
+              if (Test-Path "test_before.png") {
+                  $size = (Get-Item "test_before.png").Length / 1KB
+                  Write-Host "✓ Screenshot created: test_before.png ($($size.ToString('0.00')) KB)"
+              } else {
+                  Write-Host "✗ Screenshot file not created"
+              }
+          } else {
+              Write-Host "✗ NirCmd not found at: $env:NIRCMD_PATH"
           }
           
-          $totalSize = (Get-ChildItem -Path "$env:WORK_DIR\*.png" | Measure-Object -Property Length -Sum).Sum / 1MB
-          Write-Host "Total screenshots size: $totalSize MB"
+          # List files in current directory
+          Write-Host "Files in $(Get-Location):"
+          Get-ChildItem -Force | Format-Table -AutoSize
 
-      - name: Upload all screenshots as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: parsec-screenshots
-          path: ${{ env.WORK_DIR }}/*.png
-          retention-days: 2
-
-      - name: Keep workflow running extended period
+      - name: Install Parsec with debugging
         run: |
-          Write-Host "=========================================="
-          Write-Host "PARSCREENSHOT WORKFLOW ACTIVE"
-          Write-Host "Parsec should be installed and running"
-          Write-Host "Screenshots have been captured"
-          Write-Host "Workflow will run for extended period"
-          Write-Host "=========================================="
+          Write-Host "=== INSTALLING PARSC ==="
           
-          # Take periodic screenshots while keeping workflow alive
-          $startTime = Get-Date
-          $screenshotCounter = 100
+          # Method 1: Silent install
+          Write-Host "Attempting silent install..."
+          $installArgs = @("/S", "/ALLUSERS")
+          Write-Host "Running: $env:PARSEC_INSTALLER $installArgs"
           
-          while ((New-TimeSpan -Start $startTime -End (Get-Date)).TotalHours -lt 24) {
-              $hoursRunning = (New-TimeSpan -Start $startTime -End (Get-Date)).TotalHours
-              Write-Host "[$(Get-Date)] Workflow running for $([math]::Round($hoursRunning, 2)) hours"
+          $process = Start-Process -FilePath $env:PARSEC_INSTALLER -ArgumentList $installArgs -Wait -PassThru -NoNewWindow
+          Write-Host "Install exit code: $($process.ExitCode)"
+          
+          # Wait and check
+          Start-Sleep -Seconds 10
+          
+          # Check if Parsec processes are running
+          $parsecProcesses = Get-Process | Where-Object { $_.ProcessName -like "*parsec*" }
+          if ($parsecProcesses) {
+              Write-Host "✓ Parsec processes found:"
+              $parsecProcesses | Format-Table -AutoSize
+          } else {
+              Write-Host "✗ No Parsec processes found"
               
-              # Take a screenshot every 30 minutes
-              if ($screenshotCounter % 10 -eq 0) {
-                  $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-                  $screenshotPath = "$env:WORK_DIR\periodic_${timestamp}.png"
-                  & $env:NIRCMD_PATH savescreenshot full $screenshotPath
-                  Write-Host "Periodic screenshot taken: $screenshotPath"
+              # Try to find installed files
+              Write-Host "Searching for Parsec files..."
+              $possiblePaths = @(
+                  "C:\Program Files\Parsec",
+                  "C:\Program Files (x86)\Parsec",
+                  "$env:LOCALAPPDATA\Programs\Parsec",
+                  "$env:APPDATA\Parsec"
+              )
+              
+              foreach ($path in $possiblePaths) {
+                  if (Test-Path $path) {
+                      Write-Host "Found Parsec at: $path"
+                      Get-ChildItem $path -Recurse -ErrorAction SilentlyContinue | Select-Object -First 5 | Format-Table -AutoSize
+                  }
+              }
+          }
+          
+          # Take screenshot after install
+          & $env:NIRCMD_PATH savescreenshot full "after_install.png"
+          Write-Host "Screenshot after install taken"
+
+      - name: Debug Parsec UI
+        run: |
+          Write-Host "=== DEBUG PARSC UI ==="
+          
+          # Take multiple screenshots
+          for ($i = 1; $i -le 5; $i++) {
+              $filename = "debug_ui_$i.png"
+              Write-Host "Taking screenshot: $filename"
+              & $env:NIRCMD_PATH savescreenshot full $filename
+              Start-Sleep -Seconds 2
+          }
+          
+          # List all windows
+          Write-Host "=== ALL WINDOWS ==="
+          Add-Type @"
+              using System;
+              using System.Runtime.InteropServices;
+              using System.Text;
+              
+              public class WindowHelper {
+                  [DllImport("user32.dll")]
+                  public static extern int EnumWindows(EnumWindowsProcDelegate lpEnumFunc, int lParam);
+                  
+                  [DllImport("user32.dll")]
+                  public static extern bool IsWindowVisible(int hWnd);
+                  
+                  [DllImport("user32.dll", CharSet = CharSet.Auto)]
+                  public static extern int GetWindowText(int hWnd, StringBuilder lpString, int nMaxCount);
+                  
+                  [DllImport("user32.dll")]
+                  public static extern int GetWindowTextLength(int hWnd);
+                  
+                  public delegate bool EnumWindowsProcDelegate(int hWnd, int lParam);
+              }
+"@
+          
+          $windowList = @{}
+          $windowProc = {
+              param([int]$hWnd, [int]$lParam)
+              if ([WindowHelper]::IsWindowVisible($hWnd)) {
+                  $length = [WindowHelper]::GetWindowTextLength($hWnd)
+                  if ($length -gt 0) {
+                      $sb = New-Object System.Text.StringBuilder($length + 1)
+                      [WindowHelper]::GetWindowText($hWnd, $sb, $sb.Capacity) | Out-Null
+                      $title = $sb.ToString()
+                      if (![string]::IsNullOrEmpty($title)) {
+                          $windowList[$hWnd] = $title
+                      }
+                  }
+              }
+              return $true
+          }
+          
+          $null = [WindowHelper]::EnumWindows($windowProc, 0)
+          
+          Write-Host "Visible windows:"
+          $windowList.GetEnumerator() | Sort-Object Value | ForEach-Object {
+              Write-Host "  - $($_.Value)"
+          }
+
+      - name: Verify screenshots exist
+        run: |
+          Write-Host "=== VERIFYING SCREENSHOTS ==="
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "Full path: $(Resolve-Path . -ErrorAction SilentlyContinue)"
+          
+          $allFiles = Get-ChildItem -Path . -Force -Recurse -ErrorAction SilentlyContinue
+          Write-Host "Total files found: $($allFiles.Count)"
+          
+          $pngFiles = Get-ChildItem -Path . -Filter "*.png" -Force -Recurse -ErrorAction SilentlyContinue
+          Write-Host "PNG files found: $($pngFiles.Count)"
+          
+          if ($pngFiles.Count -gt 0) {
+              Write-Host "PNG files list:"
+              $pngFiles | ForEach-Object {
+                  $sizeKB = $_.Length / 1KB
+                  Write-Host "  - $($_.Name) ($($sizeKB.ToString('0.00')) KB) at: $($_.FullName)"
               }
               
-              $screenshotCounter++
-              Start-Sleep -Seconds 180  # Check every 3 minutes
+              # Also check common locations
+              Write-Host "=== CHECKING COMMON LOCATIONS ==="
+              $commonPaths = @(
+                  "$env:GITHUB_WORKSPACE",
+                  "$env:TEMP",
+                  "C:\",
+                  "$env:USERPROFILE"
+              )
+              
+              foreach ($path in $commonPaths) {
+                  if (Test-Path $path) {
+                      $pngs = Get-ChildItem -Path $path -Filter "*.png" -ErrorAction SilentlyContinue | Select-Object -First 3
+                      if ($pngs) {
+                          Write-Host "Found PNGs in $path : $($pngs.Count)"
+                          $pngs | ForEach-Object { Write-Host "    $($_.Name)" }
+                      }
+                  }
+              }
+          } else {
+              Write-Host "✗ No PNG files found in current directory!"
+              
+              # Try alternative screenshot method
+              Write-Host "Trying alternative screenshot method..."
+              Add-Type -AssemblyName System.Windows.Forms
+              Add-Type -AssemblyName System.Drawing
+              
+              $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+              $bounds = $screen.Bounds
+              $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+              $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+              $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+              
+              $altPath = "$(Get-Location)\alternative_screenshot.png"
+              $bitmap.Save($altPath, [System.Drawing.Imaging.ImageFormat]::Png)
+              $graphics.Dispose()
+              $bitmap.Dispose()
+              
+              if (Test-Path $altPath) {
+                  Write-Host "✓ Alternative screenshot created: $altPath"
+              }
+          }
+
+      - name: Upload ALL files as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: parsec-debug-files
+          path: |
+            D:\a\SEB\SEB\parsec-debug\
+            D:\a\SEB\SEB\parsec-debug\*
+            ${{ env.TEMP }}\*.png
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload specific screenshots
+        if: always()
+        run: |
+          Write-Host "Creating backup upload..."
+          $backupDir = "$env:TEMP\parsec-backup"
+          New-Item -ItemType Directory -Path $backupDir -Force
+          
+          # Copy any PNG files we can find
+          $pngFiles = @()
+          $pngFiles += Get-ChildItem -Path "D:\a\SEB\SEB\parsec-debug" -Filter "*.png" -ErrorAction SilentlyContinue
+          $pngFiles += Get-ChildItem -Path "$env:GITHUB_WORKSPACE" -Filter "*.png" -Recurse -ErrorAction SilentlyContinue
+          
+          if ($pngFiles.Count -gt 0) {
+              Write-Host "Found $($pngFiles.Count) PNG files to backup"
+              foreach ($file in $pngFiles) {
+                  $dest = Join-Path $backupDir $file.Name
+                  Copy-Item $file.FullName $dest -Force
+                  Write-Host "Copied: $($file.Name)"
+              }
           }
           
-          Write-Host "24-hour limit reached, workflow completed"
+          # Upload as separate artifact
+          echo "BACKUP_DIR=$backupDir" >> $env:GITHUB_ENV
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: parsec-screenshots-backup
+          path: ${{ env.TEMP }}\parsec-backup\*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Final diagnostics
+        run: |
+          Write-Host "=== FINAL DIAGNOSTICS ==="
+          Write-Host "Workflow status: ${{ job.status }}"
+          Write-Host "Time: $(Get-Date)"
+          Write-Host "=== DIRECTORIES ==="
+          Get-ChildItem -Path "D:\a\SEB\SEB" -Directory | Format-Table -AutoSize
+          Write-Host "=== FILES IN WORKSPACE ==="
+          Get-ChildItem -Path "D:\a\SEB\SEB" -File -ErrorAction SilentlyContinue | Select-Object -First 10 | Format-Table -AutoSize
