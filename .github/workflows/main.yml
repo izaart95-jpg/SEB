@@ -16,18 +16,6 @@ jobs:
           echo "WORK_DIR=$workDir" >> $env:GITHUB_ENV
           Write-Host "Working in: $workDir"
 
-      - name: Download screenshot tools
-        run: |
-          $nircmdUrl = "https://www.nirsoft.net/utils/nircmd.zip"
-          $zipPath = "$env:TEMP\nircmd.zip"
-          Write-Host "Downloading NirCmd..."
-          Invoke-WebRequest -Uri $nircmdUrl -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\nircmd_extract" -Force
-          $nircmdExe = Get-ChildItem -Path "$env:TEMP\nircmd_extract" -Filter "nircmd.exe" -Recurse | Select-Object -First 1
-          if ($nircmdExe) {
-              Copy-Item -Path $nircmdExe.FullName -Destination "$env:WORK_DIR\nircmd.exe" -Force
-          }
-
       - name: Download and install Parsec
         run: |
           Write-Host "Downloading Parsec..."
@@ -39,7 +27,7 @@ jobs:
           Start-Process -FilePath $parsecPath -ArgumentList "/S" -Wait -NoNewWindow
           Start-Sleep -Seconds 10
 
-      - name: Start Parsec and take initial screenshot
+      - name: Start Parsec
         run: |
           Write-Host "Starting Parsec..."
           
@@ -50,9 +38,12 @@ jobs:
               Write-Host "Parsec started..."
           }
           
-          Start-Sleep -Seconds 8
+          Start-Sleep -Seconds 10
+
+      - name: Take reference screenshot
+        run: |
+          Write-Host "Taking reference screenshot of login screen..."
           
-          # Take initial screenshot
           Add-Type -AssemblyName System.Windows.Forms
           Add-Type -AssemblyName System.Drawing
           $screen = [System.Windows.Forms.Screen]::PrimaryScreen
@@ -60,238 +51,233 @@ jobs:
           $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
           $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
           $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save("$env:WORK_DIR\initial_screen.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          $bitmap.Save("$env:WORK_DIR\login_screen_reference.png", [System.Drawing.Imaging.ImageFormat]::Png)
           $graphics.Dispose()
           $bitmap.Dispose()
+          
+          Write-Host "Screen resolution: $($bounds.Width)x$($bounds.Height)")
 
-      - name: Clear ALL fields first approach
+      - name: Login with precise mouse coordinates
         run: |
-          Write-Host "=== CLEAR ALL FIELDS FIRST ==="
+          Write-Host "=== LOGIN WITH PRECISE MOUSE COORDINATES ==="
           
+          # Get screen dimensions
           Add-Type -AssemblyName System.Windows.Forms
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+          $width = $screen.Bounds.Width
+          $height = $screen.Bounds.Height
           
-          # Step 1: Click to focus the window
-          Write-Host "Focusing Parsec window..."
-          if (Test-Path "$env:WORK_DIR\nircmd.exe") {
-              $width = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
-              $height = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
-              $centerX = [math]::Round($width / 2)
-              $centerY = [math]::Round($height / 2)
+          Write-Host "Screen: ${width}x${height}"
+          Write-Host "Assuming 1024x768 layout for coordinates..."
+          
+          # For typical Parsec login window at 1024x768:
+          # Email field: ~512x300 (center, 300px from top)
+          # Password field: ~512x350 (50px below email)
+          # Login button: ~512x400 (50px below password)
+          
+          # Scale coordinates based on actual screen size
+          $scaleX = $width / 1024
+          $scaleY = $height / 768
+          
+          $emailX = [math]::Round(512 * $scaleX)
+          $emailY = [math]::Round(300 * $scaleY)
+          
+          $passwordX = [math]::Round(512 * $scaleX)
+          $passwordY = [math]::Round(350 * $scaleY)
+          
+          $loginX = [math]::Round(512 * $scaleX)
+          $loginY = [math]::Round(400 * $scaleY)
+          
+          Write-Host "Calculated coordinates:"
+          Write-Host "  Email: $emailX, $emailY"
+          Write-Host "  Password: $passwordX, $passwordY"
+          Write-Host "  Login: $loginX, $loginY"
+          
+          # Download AutoHotKey for more reliable input
+          Write-Host "Downloading AutoHotKey for better input control..."
+          $ahkUrl = "https://www.autohotkey.com/download/ahk.zip"
+          $ahkPath = "$env:TEMP\ahk.zip"
+          Invoke-WebRequest -Uri $ahkUrl -OutFile $ahkPath
+          Expand-Archive -Path $ahkPath -DestinationPath "$env:TEMP\ahk" -Force
+          
+          # Create AutoHotKey script
+          $ahkScript = @"
+; AutoHotKey script for Parsec login
+SetKeyDelay, 50, 50
+SetMouseDelay, 50
+
+; Wait for Parsec to be ready
+Sleep, 3000
+
+; CLICK EMAIL FIELD
+MouseMove, $emailX, $emailY
+Sleep, 500
+Click
+Sleep, 500
+Click  ; Double click to select any existing text
+Sleep, 500
+
+; TYPE EMAIL
+Send, {Ctrl Down}a{Ctrl Up}  ; Select all
+Sleep, 200
+Send, {Delete}  ; Clear field
+Sleep, 500
+SendRaw, ffbewafa709@gmail.com
+Sleep, 1000
+
+; CLICK PASSWORD FIELD
+MouseMove, $passwordX, $passwordY
+Sleep, 500
+Click
+Sleep, 500
+Click  ; Double click
+Sleep, 500
+
+; TYPE PASSWORD
+Send, {Ctrl Down}a{Ctrl Up}  ; Select all
+Sleep, 200
+Send, {Delete}  ; Clear field
+Sleep, 500
+SendRaw, Hamza@123456
+Sleep, 1000
+
+; CLICK LOGIN BUTTON
+MouseMove, $loginX, $loginY
+Sleep, 500
+Click
+Sleep, 500
+
+; Wait and exit
+Sleep, 3000
+ExitApp
+"@
+          
+          # Save and run AHK script
+          $scriptPath = "$env:WORK_DIR\parsec_login.ahk"
+          $ahkExePath = Get-ChildItem -Path "$env:TEMP\ahk" -Filter "AutoHotkey.exe" -Recurse | Select-Object -First 1
+          
+          if ($ahkExePath) {
+              $ahkExePath = $ahkExePath.FullName
+              Set-Content -Path $scriptPath -Value $ahkScript
               
-              & "$env:WORK_DIR\nircmd.exe" setcursor $centerX $centerY
-              Start-Sleep -Milliseconds 500
-              & "$env:WORK_DIR\nircmd.exe" sendmouse left click
-              Start-Sleep -Milliseconds 500
-              & "$env:WORK_DIR\nircmd.exe" sendmouse left click
+              Write-Host "Running AutoHotKey script..."
+              Start-Process -FilePath $ahkExePath -ArgumentList "`"$scriptPath`"" -Wait
+              Write-Host "AutoHotKey script completed"
+          } else {
+              Write-Host "AutoHotKey not found, using PowerShell fallback..."
+              
+              # PowerShell fallback using nircmd
+              if (Test-Path "$env:WORK_DIR\nircmd.exe") {
+                  Write-Host "Using nircmd fallback..."
+                  
+                  # Click email field
+                  & "$env:WORK_DIR\nircmd.exe" setcursor $emailX $emailY
+                  Start-Sleep -Milliseconds 500
+                  & "$env:WORK_DIR\nircmd.exe" sendmouse left dblclick
+                  Start-Sleep -Seconds 1
+                  
+                  # Type email
+                  Add-Type -AssemblyName System.Windows.Forms
+                  [System.Windows.Forms.SendKeys]::SendWait("^a{DELETE}")
+                  Start-Sleep -Milliseconds 500
+                  [System.Windows.Forms.SendKeys]::SendWait("ffbewafa709@gmail.com")
+                  Start-Sleep -Seconds 1
+                  
+                  # Click password field
+                  & "$env:WORK_DIR\nircmd.exe" setcursor $passwordX $passwordY
+                  Start-Sleep -Milliseconds 500
+                  & "$env:WORK_DIR\nircmd.exe" sendmouse left dblclick
+                  Start-Sleep -Seconds 1
+                  
+                  # Type password
+                  [System.Windows.Forms.SendKeys]::SendWait("^a{DELETE}")
+                  Start-Sleep -Milliseconds 500
+                  [System.Windows.Forms.SendKeys]::SendWait("Hamza@123456")
+                  Start-Sleep -Seconds 1
+                  
+                  # Click login button
+                  & "$env:WORK_DIR\nircmd.exe" setcursor $loginX $loginY
+                  Start-Sleep -Milliseconds 500
+                  & "$env:WORK_DIR\nircmd.exe" sendmouse left click
+                  Start-Sleep -Seconds 1
+              }
           }
           
-          Start-Sleep -Seconds 2
-          
-          # Step 2: Clear EVERYTHING from all fields using multiple Tabs
-          Write-Host "Clearing all possible fields..."
-          
-          # Try to clear email field (usually first field)
-          [System.Windows.Forms.SendKeys]::SendWait("^a")  # Ctrl+A
-          [System.Windows.Forms.SendKeys]::SendWait("{DELETE}")
-          Start-Sleep -Milliseconds 500
-          
-          # Tab to next field and clear it
-          [System.Windows.Forms.SendKeys]::SendWait("{TAB}")
-          Start-Sleep -Milliseconds 500
-          [System.Windows.Forms.SendKeys]::SendWait("^a")
-          [System.Windows.Forms.SendKeys]::SendWait("{DELETE}")
-          Start-Sleep -Milliseconds 500
-          
-          # Tab to next field and clear it (in case there are 3 fields)
-          [System.Windows.Forms.SendKeys]::SendWait("{TAB}")
-          Start-Sleep -Milliseconds 500
-          [System.Windows.Forms.SendKeys]::SendWait("^a")
-          [System.Windows.Forms.SendKeys]::SendWait("{DELETE}")
-          Start-Sleep -Milliseconds 500
-          
-          # Tab back to first field (Shift+Tab)
-          [System.Windows.Forms.SendKeys]::SendWait("+{TAB}")  # Shift+Tab
-          Start-Sleep -Milliseconds 500
-          [System.Windows.Forms.SendKeys]::SendWait("+{TAB}")  # Shift+Tab again
-          Start-Sleep -Seconds 1
-          
-          # Take screenshot after clearing
-          Add-Type -AssemblyName System.Drawing
-          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-          $bounds = $screen.Bounds
-          $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save("$env:WORK_DIR\after_clearing.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          $graphics.Dispose()
-          $bitmap.Dispose()
+          Write-Host "Login attempt completed with mouse coordinates"
 
-      - name: Enter email in FIRST field only
+      - name: Alternative: Use PowerShell UI Automation
         run: |
-          Write-Host "=== ENTERING EMAIL IN FIRST FIELD ==="
-          
-          Add-Type -AssemblyName System.Windows.Forms
-          
-          # We should be in email field after clearing
-          Write-Host "Typing email in first field..."
-          
-          # Type email character by character
-          $email = "ffbewafa709@gmail.com"
-          foreach ($char in $email.ToCharArray()) {
-              [System.Windows.Forms.SendKeys]::SendWait("$char")
-              Start-Sleep -Milliseconds 50
-          }
-          
-          Write-Host "Email typed: $email"
-          Start-Sleep -Seconds 1
-          
-          # Take screenshot after email
-          Add-Type -AssemblyName System.Drawing
-          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-          $bounds = $screen.Bounds
-          $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save("$env:WORK_DIR\email_entered.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          $graphics.Dispose()
-          $bitmap.Dispose()
-
-      - name: Navigate to password field carefully
-        run: |
-          Write-Host "=== NAVIGATING TO PASSWORD FIELD ==="
-          
-          Add-Type -AssemblyName System.Windows.Forms
-          
-          # METHOD A: Try Tab key first
-          Write-Host "Trying Tab to navigate to password field..."
-          [System.Windows.Forms.SendKeys]::SendWait("{TAB}")
-          Start-Sleep -Seconds 1
-          
-          # Take screenshot to see if we're in password field
-          Add-Type -AssemblyName System.Drawing
-          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-          $bounds = $screen.Bounds
-          $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save("$env:WORK_DIR\after_tab.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          $graphics.Dispose()
-          $bitmap.Dispose()
-          
-          # METHOD B: If Tab didn't work, use mouse click
-          Write-Host "Trying mouse click for password field..."
-          if (Test-Path "$env:WORK_DIR\nircmd.exe") {
-              $width = $bounds.Width
-              $height = $bounds.Height
-              
-              # Click slightly below where we clicked for email
-              $passwordX = [math]::Round($width / 2)
-              $passwordY = [math]::Round($height / 2) + 40  # 40 pixels below center
-              
-              & "$env:WORK_DIR\nircmd.exe" setcursor $passwordX $passwordY
-              Start-Sleep -Milliseconds 500
-              & "$env:WORK_DIR\nircmd.exe" sendmouse left dblclick  # Double click to select
-              Write-Host "Clicked at: $passwordX, $passwordY"
-          }
-          
-          Start-Sleep -Seconds 1
-
-      - name: Enter password in SECOND field
-        run: |
-          Write-Host "=== ENTERING PASSWORD ==="
-          
-          Add-Type -AssemblyName System.Windows.Forms
-          
-          # Clear any existing text in password field
-          Write-Host "Clearing password field..."
-          [System.Windows.Forms.SendKeys]::SendWait("^a")  # Ctrl+A
-          [System.Windows.Forms.SendKeys]::SendWait("{DELETE}")
-          Start-Sleep -Milliseconds 500
-          
-          # Take screenshot before typing password
-          Add-Type -AssemblyName System.Drawing
-          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-          $bounds = $screen.Bounds
-          $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save("$env:WORK_DIR\before_password.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          $graphics.Dispose()
-          $bitmap.Dispose()
-          
-          # Type password
-          Write-Host "Typing password..."
-          $password = "Hamza@123456"
-          foreach ($char in $password.ToCharArray()) {
-              [System.Windows.Forms.SendKeys]::SendWait("$char")
-              Start-Sleep -Milliseconds 50
-          }
-          
-          Write-Host "Password typed: $password"
-          Start-Sleep -Seconds 1
-          
-          # Take screenshot after password
-          $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save("$env:WORK_DIR\password_entered.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          $graphics.Dispose()
-          $bitmap.Dispose()
-
-      - name: Submit login
-        run: |
-          Write-Host "=== SUBMITTING LOGIN ==="
-          
-          Add-Type -AssemblyName System.Windows.Forms
-          
-          # METHOD 1: Press Enter (might work if password field is focused)
-          Write-Host "Trying Enter key..."
-          [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-          Start-Sleep -Seconds 2
-          
-          # METHOD 2: Try Tab then Enter
-          Write-Host "Trying Tab then Enter..."
-          [System.Windows.Forms.SendKeys]::SendWait("{TAB}")
-          Start-Sleep -Milliseconds 500
-          [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-          Start-Sleep -Seconds 2
-          
-          # METHOD 3: Mouse click on login button
-          Write-Host "Trying mouse click on login button..."
-          if (Test-Path "$env:WORK_DIR\nircmd.exe") {
-              $width = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
-              $height = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
-              
-              # Login button is usually below password field
-              $loginX = [math]::Round($width / 2)
-              $loginY = [math]::Round($height / 2) + 80  # 80 pixels below center
-              
-              & "$env:WORK_DIR\nircmd.exe" setcursor $loginX $loginY
-              Start-Sleep -Milliseconds 500
-              & "$env:WORK_DIR\nircmd.exe" sendmouse left click
-              Write-Host "Clicked login at: $loginX, $loginY"
-          }
-          
-          Start-Sleep -Seconds 3
-          
-          # Take screenshot after submission
-          Add-Type -AssemblyName System.Drawing
-          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-          $bounds = $screen.Bounds
-          $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save("$env:WORK_DIR\after_submission.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          $graphics.Dispose()
-          $bitmap.Dispose()
-
-      - name: Verify and document results
-        run: |
-          Write-Host "=== FINAL VERIFICATION ==="
+          Write-Host "=== ALTERNATIVE: POWERSHELL UI AUTOMATION ==="
           Start-Sleep -Seconds 5
           
-          # Take final screenshots
-          for ($i = 1; $i -le 3; $i++) {
+          # Try to find and interact with Parsec window using UI Automation
+          # This is a backup method
+          
+          # Take screenshot to see current state
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+          $bounds = $screen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bitmap.Save("$env:WORK_DIR\after_ahk_attempt.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          $graphics.Dispose()
+          $bitmap.Dispose()
+          
+          # Simple retry with different coordinates
+          Write-Host "Trying different coordinates..."
+          
+          # Try clicking at different Y positions for email field
+          $width = $bounds.Width
+          $height = $bounds.Height
+          
+          # Higher up for email (Parsec window might be smaller)
+          $emailY2 = [math]::Round($height * 0.4)  # 40% from top
+          $passwordY2 = [math]::Round($height * 0.5)  # 50% from top
+          $loginY2 = [math]::Round($height * 0.6)  # 60% from top
+          $centerX = [math]::Round($width / 2)
+          
+          if (Test-Path "$env:WORK_DIR\nircmd.exe") {
+              Write-Host "Trying alternative coordinates..."
+              Write-Host "Email: $centerX, $emailY2"
+              Write-Host "Password: $centerX, $passwordY2"
+              Write-Host "Login: $centerX, $loginY2"
+              
+              # Click email
+              & "$env:WORK_DIR\nircmd.exe" setcursor $centerX $emailY2
+              Start-Sleep -Milliseconds 500
+              & "$env:WORK_DIR\nircmd.exe" sendmouse left dblclick
+              Start-Sleep -Seconds 1
+              
+              # Type email
+              Add-Type -AssemblyName System.Windows.Forms
+              [System.Windows.Forms.SendKeys]::SendWait("^a{DELETE}ffbewafa709@gmail.com")
+              Start-Sleep -Seconds 1
+              
+              # Click password
+              & "$env:WORK_DIR\nircmd.exe" setcursor $centerX $passwordY2
+              Start-Sleep -Milliseconds 500
+              & "$env:WORK_DIR\nircmd.exe" sendmouse left dblclick
+              Start-Sleep -Seconds 1
+              
+              # Type password
+              [System.Windows.Forms.SendKeys]::SendWait("^a{DELETE}Hamza@123456")
+              Start-Sleep -Seconds 1
+              
+              # Click login
+              & "$env:WORK_DIR\nircmd.exe" setcursor $centerX $loginY2
+              Start-Sleep -Milliseconds 500
+              & "$env:WORKORD\nircmd.exe" sendmouse left click
+          }
+
+      - name: Take verification screenshots
+        run: |
+          Write-Host "=== TAKING VERIFICATION SCREENSHOTS ==="
+          Start-Sleep -Seconds 5
+          
+          # Take multiple screenshots
+          for ($i = 1; $i -le 5; $i++) {
               Add-Type -AssemblyName System.Windows.Forms
               Add-Type -AssemblyName System.Drawing
               
@@ -301,35 +287,23 @@ jobs:
               $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
               $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
               
-              $fileName = "final_$i.png"
+              $fileName = "verify_$i.png"
               $bitmap.Save("$env:WORK_DIR\$fileName", [System.Drawing.Imaging.ImageFormat]::Png)
               $graphics.Dispose()
               $bitmap.Dispose()
               
-              Write-Host "Final screenshot $i taken"
-              Start-Sleep -Seconds 1
+              Write-Host "Verification screenshot $i taken"
+              Start-Sleep -Seconds 2
           }
           
-          # Check Parsec process
+          # Check Parsec status
           $parsecProcess = Get-Process | Where-Object { $_.ProcessName -like "*parsec*" }
-          Write-Host "Parsec processes found:"
+          Write-Host "Parsec processes:"
           $parsecProcess | Format-Table ProcessName, Id, MainWindowTitle -AutoSize
-          
-          # List all screenshots
-          Write-Host "=== ALL FILES ==="
-          Get-ChildItem -Path $env:WORK_DIR | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
 
-      - name: Upload screenshots
+      - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: parsec-screenshots
-          path: D:\a\SEB\SEB\parsec\*.png
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Upload all files as backup
-        uses: actions/upload-artifact@v4
-        with:
-          name: parsec-all-files
+          name: parsec-results
           path: D:\a\SEB\SEB\parsec\
           retention-days: 1
