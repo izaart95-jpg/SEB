@@ -55,7 +55,7 @@ jobs:
           $graphics.Dispose()
           $bitmap.Dispose()
           
-          Write-Host "Screen resolution: $($bounds.Width)x$($bounds.Height)")
+          Write-Host "Screen resolution: $($bounds.Width)x$($bounds.Height)"
 
       - name: Login with precise mouse coordinates
         run: |
@@ -193,7 +193,7 @@ jobs:
           Write-Host "Alternative coordinates:"
           Write-Host "  Email: $centerX, $emailY_alt"
           Write-Host "  Password: $centerX, $passwordY_alt"
-          WriteHost "  Login: $centerX, $loginY_alt"
+          Write-Host "  Login: $centerX, $loginY_alt"
           
           if (Test-Path "$env:WORK_DIR\nircmd.exe") {
               # Try clicking at different spots in a grid pattern
@@ -240,7 +240,7 @@ jobs:
               # Login button (assuming 50px below password)
               & "$env:WORK_DIR\nircmd.exe" setcursor $centerX ($startY + 120)
               Start-Sleep -Milliseconds 500
-              & "$env:WORKORD\nircmd.exe" sendmouse left click
+              & "$env:WORK_DIR\nircmd.exe" sendmouse left click
           }
 
       - name: Take final verification screenshots
