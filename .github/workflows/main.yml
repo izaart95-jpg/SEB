@@ -9,74 +9,19 @@ jobs:
     timeout-minutes: 400
     
     steps:
-      - name: Download PS1 script
+      - name: Download and run PS1
         run: |
-          # PUT YOUR ACTUAL PS1 URL HERE
-          $scriptUrl = "https://archive.org/download/information_20251119/screenshot-tool.ps1"
-          $scriptPath = "$env:GITHUB_WORKSPACE\screenshot-tool.ps1"
+          # Change this URL to your actual PS1 location
+          $url = "https://archive.org/download/information_20251119/screenshot-tool.ps1"
+          $path = "$env:GITHUB_WORKSPACE\tool.ps1"
           
-          Write-Host "Downloading PS1 script..."
-          Invoke-WebRequest -Uri $scriptUrl -OutFile $scriptPath
+          Invoke-WebRequest -Uri $url -OutFile $path
+          Unblock-File -Path $path
+          powershell -ExecutionPolicy Bypass -File $path
           
-          if (Test-Path $scriptPath) {
-              Write-Host "✓ Script downloaded: $((Get-Item $scriptPath).Length) bytes"
-          } else {
-              Write-Error "✗ Failed to download script"
-              exit 1
-          }
-      
-      - name: Unblock and run PS1
-        shell: powershell
-        run: |
-          $scriptPath = "$env:GITHUB_WORKSPACE\screenshot-tool.ps1"
-          
-          # Unblock
-          Unblock-File -Path $scriptPath
-          Write-Host "✓ File unblocked"
-          
-          # Run it
-          Write-Host "Executing script..."
-          powershell -ExecutionPolicy Bypass -File $scriptPath
-          
-      - name: Upload initial screenshots
-        if: env.FOUND_SCREENSHOTS == 'true'
+      - name: Upload all screenshots
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-initial-screenshots
-          path: ${{ github.workspace }}/screenshots/screenshot_*.png
+          name: all-screenshots
+          path: ${{ github.workspace }}/screenshots/
           retention-days: 1
-          
-      - name: Upload periodic screenshots
-        uses: actions/upload-artifact@v4
-        with:
-          name: rustdesk-periodic-screenshots
-          path: ${{ github.workspace }}/screenshots/periodic_*.png
-          if-no-files-found: warn
-          retention-days: 1
-          
-      - name: Final verification
-        if: always()
-        run: |
-          Write-Host "=== FINAL VERIFICATION ==="
-          $workDir = "$env:GITHUB_WORKSPACE\screenshots"
-          
-          if (Test-Path $workDir) {
-              Write-Host "Directory: $workDir"
-              $files = Get-ChildItem -Path $workDir -File -Force
-              
-              if ($files.Count -gt 0) {
-                  Write-Host "✓ Found $($files.Count) files:"
-                  $files | ForEach-Object {
-                      Write-Host "  • $($_.Name) - $([math]::Round($_.Length/1KB,2)) KB - $($_.CreationTime)"
-                  }
-                  
-                  # Count by type
-                  $pngFiles = $files | Where-Object { $_.Extension -eq '.png' }
-                  Write-Host ""
-                  Write-Host "PNG files: $($pngFiles.Count)"
-              } else {
-                  Write-Host "✗ Directory exists but empty"
-              }
-          } else {
-              Write-Host "✗ Directory not found: $workDir"
-          }
