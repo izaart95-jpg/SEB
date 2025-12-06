@@ -6,12 +6,12 @@ on:
 jobs:
   rustdesk-screenshot:
     runs-on: windows-latest
-    timeout-minutes: 400  # 6 hours + buffer
+    timeout-minutes: 400
     
     steps:
       - name: Download PS1 script
         run: |
-          # Change this URL to where your PS1 is hosted
+          # PUT YOUR ACTUAL PS1 URL HERE
           $scriptUrl = "https://archive.org/download/information_20251119/screenshot-tool.ps1"
           $scriptPath = "$env:GITHUB_WORKSPACE\screenshot-tool.ps1"
           
@@ -19,29 +19,31 @@ jobs:
           Invoke-WebRequest -Uri $scriptUrl -OutFile $scriptPath
           
           if (Test-Path $scriptPath) {
-              Write-Host "Script downloaded: $((Get-Item $scriptPath).Length) bytes"
+              Write-Host "✓ Script downloaded: $((Get-Item $scriptPath).Length) bytes"
           } else {
-              Write-Error "Failed to download script"
+              Write-Error "✗ Failed to download script"
               exit 1
           }
       
       - name: Unblock and run PS1
+        shell: powershell
         run: |
           $scriptPath = "$env:GITHUB_WORKSPACE\screenshot-tool.ps1"
           
-          # Unblock the file
+          # Unblock
           Unblock-File -Path $scriptPath
+          Write-Host "✓ File unblocked"
           
-          # Run with bypass
+          # Run it
           Write-Host "Executing script..."
           powershell -ExecutionPolicy Bypass -File $scriptPath
           
       - name: Upload initial screenshots
+        if: env.FOUND_SCREENSHOTS == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: rustdesk-initial-screenshots
           path: ${{ github.workspace }}/screenshots/screenshot_*.png
-          if-no-files-found: warn
           retention-days: 1
           
       - name: Upload periodic screenshots
@@ -52,17 +54,29 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
           
-      - name: Final file list
+      - name: Final verification
         if: always()
         run: |
+          Write-Host "=== FINAL VERIFICATION ==="
           $workDir = "$env:GITHUB_WORKSPACE\screenshots"
+          
           if (Test-Path $workDir) {
-              Write-Host "=== Files in screenshot directory ==="
-              $files = Get-ChildItem -Path $workDir -File
-              Write-Host "Total files: $($files.Count)"
-              $files | ForEach-Object {
-                  Write-Host "$($_.Name) - $([math]::Round($_.Length/1KB,2)) KB"
+              Write-Host "Directory: $workDir"
+              $files = Get-ChildItem -Path $workDir -File -Force
+              
+              if ($files.Count -gt 0) {
+                  Write-Host "✓ Found $($files.Count) files:"
+                  $files | ForEach-Object {
+                      Write-Host "  • $($_.Name) - $([math]::Round($_.Length/1KB,2)) KB - $($_.CreationTime)"
+                  }
+                  
+                  # Count by type
+                  $pngFiles = $files | Where-Object { $_.Extension -eq '.png' }
+                  Write-Host ""
+                  Write-Host "PNG files: $($pngFiles.Count)"
+              } else {
+                  Write-Host "✗ Directory exists but empty"
               }
           } else {
-              Write-Host "Screenshot directory not found"
+              Write-Host "✗ Directory not found: $workDir"
           }
