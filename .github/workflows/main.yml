@@ -144,7 +144,7 @@ jobs:
           echo "BUTTON_X=$NEW_X" >> $GITHUB_ENV
           echo "BUTTON_Y=$NEW_Y" >> $GITHUB_ENV
 
-      - name: Click Allow Button (Fixed)
+      - name: Click Allow Button
         run: |
           echo "=== Clicking Allow Button ==="
           echo "Clicking at coordinates: ($BUTTON_X, $BUTTON_Y)"
@@ -160,8 +160,8 @@ jobs:
           debug_before="$SCREENSHOT_DIR/debug_before_click_$(date +%H%M%S).png"
           screencapture -x "$debug_before"
           
-          # Click the Allow button using cliclick (most reliable)
-          echo "Clicking the button with cliclick..."
+          # Click the Allow button
+          echo "Clicking the button..."
           cliclick c:$BUTTON_X,$BUTTON_Y
           
           echo "✅ Click performed"
@@ -174,26 +174,35 @@ jobs:
           debug_after="$SCREENSHOT_DIR/debug_after_click_$(date +%H%M%S).png"
           screencapture -x "$debug_after"
           
-          # Alternative AppleScript method (fixed syntax)
-          echo "Trying AppleScript alternative..."
-          /usr/bin/osascript <<EOF
+          # Try alternative clicking methods if needed
+          echo "Trying alternative click methods..."
+          
+          # Method 2: AppleScript
+          osascript <<EOF
           tell application "System Events"
-            delay 0.5
-            set xPos to $BUTTON_X
-            set yPos to $BUTTON_Y
-            click at {xPos, yPos}
+            delay 1
+            click at {$BUTTON_X, $BUTTON_Y}
           end tell
-          EOF
+EOF
+          
+          # Method 3: Python script as backup
+          python3 <<EOF
+          import subprocess
+          import time
+          
+          # Click using AppleScript
+          script = f'''
+          tell application "System Events"
+            click at {{$BUTTON_X, $BUTTON_Y}}
+          end tell
+          '''
+          
+          subprocess.run(['osascript', '-e', script])
+EOF
           
           # Grant permissions via tccutil if possible
-          echo "Attempting to grant screen recording permission via TCC..."
+          echo "Attempting to grant screen recording permission..."
           sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenRecording','com.carriez.rustdesk',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,UNIXEPOCH());" 2>/dev/null || echo "Note: May not have permission to modify TCC database"
-          
-          # Also try tccutil command
-          echo "Attempting tccutil command..."
-          sudo tccutil reset ScreenRecording com.carriez.rustdesk 2>/dev/null || true
-          
-          echo "✅ All click methods attempted"
 
       - name: Take Verification Screenshots
         run: |
@@ -230,87 +239,73 @@ jobs:
           echo "=== All Screenshots ==="
           ls -la "$SCREENSHOT_DIR/" 2>/dev/null | head -15
 
-      - name: Additional UI Clicks (Your Requested Addon)
+      - name: Perform Additional Clicks Sequence
         run: |
-          echo "=== Performing Additional UI Clicks ==="
+          echo "=== Performing Additional Clicks Sequence ==="
           
-          # Calculate scaled coordinates for your requested clicks
-          # Original coordinates at 1024x768: (210, 563) and (542, 293)
+          # Calculate scaled coordinates for your sequence
+          # Original coordinates for 1024x768 resolution
+          ORIGINAL_COORDS="210,563 542,293 820,316"
           
-          ORIGINAL_WIDTH=1024
-          ORIGINAL_HEIGHT=768
-          
-          # First click coordinates
-          ORIG_X1=210
-          ORIG_Y1=563
-          
-          # Second click coordinates
-          ORIG_X2=542
-          ORIG_Y2=293
+          echo "Original coordinates: $ORIGINAL_COORDS"
+          echo "Current resolution: ${SCREEN_WIDTH}x${SCREEN_HEIGHT}"
+          echo "Original resolution: 1024x768"
           
           # Calculate scaling factors
-          X_SCALE=$(echo "scale=2; $SCREEN_WIDTH / $ORIGINAL_WIDTH" | bc)
-          Y_SCALE=$(echo "scale=2; $SCREEN_HEIGHT / $ORIGINAL_HEIGHT" | bc)
+          X_SCALE=$(echo "scale=2; $SCREEN_WIDTH / 1024" | bc)
+          Y_SCALE=$(echo "scale=2; $SCREEN_HEIGHT / 768" | bc)
           
-          # Calculate scaled coordinates
-          SCALED_X1=$(echo "$ORIG_X1 * $X_SCALE" | bc | awk '{printf "%.0f", $1}')
-          SCALED_Y1=$(echo "$ORIG_Y1 * $Y_SCALE" | bc | awk '{printf "%.0f", $1}')
-          SCALED_X2=$(echo "$ORIG_X2 * $X_SCALE" | bc | awk '{printf "%.0f", $1}')
-          SCALED_Y2=$(echo "$ORIG_Y2 * $Y_SCALE" | bc | awk '{printf "%.0f", $1}')
+          echo "Scaling factors: X=${X_SCALE}, Y=${Y_SCALE}"
           
-          echo "Original coordinates at ${ORIGINAL_WIDTH}x${ORIGINAL_HEIGHT}:"
-          echo "  Click 1: ($ORIG_X1, $ORIG_Y1)"
-          echo "  Click 2: ($ORIG_X2, $ORIG_Y2)"
-          echo ""
-          echo "Scaled coordinates at ${SCREEN_WIDTH}x${SCREEN_HEIGHT}:"
-          echo "  Click 1: ($SCALED_X1, $SCALED_Y1)"
-          echo "  Click 2: ($SCALED_X2, $SCALED_Y2)"
-          
-          echo "SCALED_X1=$SCALED_X1" >> $GITHUB_ENV
-          echo "SCALED_Y1=$SCALED_Y1" >> $GITHUB_ENV
-          echo "SCALED_X2=$SCALED_X2" >> $GITHUB_ENV
-          echo "SCALED_Y2=$SCALED_Y2" >> $GITHUB_ENV
-          
-          # Ensure cliclick is installed
+          # Install cliclick if not already installed
           if ! command -v cliclick &> /dev/null; then
             echo "Installing cliclick..."
             brew install cliclick
           fi
           
-          # Perform first click at (210, 563) scaled
+          # Process each coordinate
+          coord_index=1
+          for coord in $ORIGINAL_COORDS; do
+            # Parse original coordinates
+            ORIG_X=$(echo $coord | cut -d',' -f1)
+            ORIG_Y=$(echo $coord | cut -d',' -f2)
+            
+            # Calculate scaled coordinates
+            SCALED_X=$(echo "$ORIG_X * $X_SCALE" | bc | awk '{printf "%.0f", $1}')
+            SCALED_Y=$(echo "$ORIG_Y * $Y_SCALE" | bc | awk '{printf "%.0f", $1}')
+            
+            # Ensure within bounds
+            if [ $SCALED_X -lt 0 ]; then SCALED_X=0; fi
+            if [ $SCALED_X -gt $SCREEN_WIDTH ]; then SCALED_X=$((SCREEN_WIDTH - 10)); fi
+            if [ $SCALED_Y -lt 0 ]; then SCALED_Y=0; fi
+            if [ $SCALED_Y -gt $SCREEN_HEIGHT ]; then SCALED_Y=$((SCREEN_HEIGHT - 10)); fi
+            
+            echo ""
+            echo "Click $coord_index: Original ($ORIG_X, $ORIG_Y) -> Scaled ($SCALED_X, $SCALED_Y)"
+            
+            # Perform click
+            cliclick c:$SCALED_X,$SCALED_Y
+            echo "✅ Clicked at ($SCALED_X, $SCALED_Y)"
+            
+            # Wait 2 seconds as requested
+            echo "   Waiting 2 seconds..."
+            sleep 2
+            
+            coord_index=$((coord_index + 1))
+          done
+          
+          # Take screenshot after sequence
           echo ""
-          echo "🔘 Performing first click at ($SCALED_X1, $SCALED_Y1)..."
-          cliclick c:$SCALED_X1,$SCALED_Y1
-          echo "✅ First click completed"
+          echo "📸 Taking screenshot after click sequence..."
+          sequence_file="$SCREENSHOT_DIR/after_click_sequence_$(date +%Y%m%d_%H%M%S).png"
+          screencapture -x "$sequence_file"
           
-          # Wait 2 seconds
-          echo "⏳ Waiting 2 seconds..."
-          sleep 2
-          
-          # Perform second click at (542, 293) scaled
-          echo ""
-          echo "🔘 Performing second click at ($SCALED_X2, $SCALED_Y2)..."
-          cliclick c:$SCALED_X2,$SCALED_Y2
-          echo "✅ Second click completed"
-          
-          # Wait 2 seconds
-          echo "⏳ Waiting 2 seconds..."
-          sleep 2
-          
-          # Take screenshot after the additional clicks
-          echo ""
-          echo "📸 Taking screenshot after additional clicks..."
-          addon_file="$SCREENSHOT_DIR/addon_after_clicks_$(date +%Y%m%d_%H%M%S).png"
-          screencapture -x "$addon_file"
-          
-          if [ -f "$addon_file" ]; then
-            filesize=$(ls -lh "$addon_file" | awk '{print $5}')
-            echo "✅ Addon screenshot saved: $(basename $addon_file) ($filesize)"
+          if [ -f "$sequence_file" ]; then
+            filesize=$(ls -lh "$sequence_file" | awk '{print $5}')
+            echo "✅ Sequence screenshot saved: $(basename $sequence_file) ($filesize)"
           else
-            echo "⚠️ Failed to take addon screenshot"
+            echo "⚠️ Failed to take sequence screenshot"
           fi
-          
-          echo "=== Additional UI Clicks Completed ==="
 
       - name: Upload All Screenshots
         uses: actions/upload-artifact@v4
@@ -323,7 +318,7 @@ jobs:
         run: |
           echo "=== Keeping System Running for 20 Minutes ==="
           echo "Start time: $(date)"
-          echo "End time: $(date -v+20M)"
+          echo "End time: $(date -v+20M '+%H:%M:%S')"
           echo ""
           echo "RustDesk should be working with screen recording permission"
           echo "If the Allow button was clicked successfully, RustDesk should be functional"
@@ -334,9 +329,8 @@ jobs:
           echo "RustDesk 20-Minute Monitoring Log" > "$STATUS_FILE"
           echo "=================================" >> "$STATUS_FILE"
           echo "Resolution: $RESOLUTION" >> "$STATUS_FILE"
-          echo "Allow button clicked at: ($BUTTON_X, $BUTTON_Y)" >> "$STATUS_FILE"
-          echo "Additional click 1 at: ($SCALED_X1, $SCALED_Y1)" >> "$STATUS_FILE"
-          echo "Additional click 2 at: ($SCALED_X2, $SCALED_Y2)" >> "$STATUS_FILE"
+          echo "Button clicked at: ($BUTTON_X, $BUTTON_Y)" >> "$STATUS_FILE"
+          echo "Additional clicks: 210,563 -> 542,293 -> 820,316" >> "$STATUS_FILE"
           echo "Start time: $(date)" >> "$STATUS_FILE"
           echo "" >> "$STATUS_FILE"
           
@@ -374,7 +368,7 @@ jobs:
             # Display RustDesk window info occasionally
             if [ $((minute % 3)) -eq 0 ]; then
               echo "  Checking window state..."
-              window_info=$(osascript <<'EOF' 2>/dev/null || echo "Window check failed")
+              window_check=$(osascript 2>/dev/null <<'WINDOW_SCRIPT'
               tell application "System Events"
                 try
                   tell process "RustDesk"
@@ -385,9 +379,13 @@ jobs:
                   return "  RustDesk window check failed"
                 end try
               end tell
-              EOF
-              echo "$window_info"
-              echo "$window_info" >> "$STATUS_FILE"
+WINDOW_SCRIPT
+              )
+              
+              if [ -n "$window_check" ]; then
+                echo "$window_check"
+                echo "$window_check" >> "$STATUS_FILE"
+              fi
             fi
             
             echo "  Waiting 1 minute..."
@@ -402,7 +400,8 @@ jobs:
           # Final status
           echo ""
           echo "=== Final Status ==="
-          echo "Total screenshots: $(find "$SCREENSHOT_DIR" -name "*.png" 2>/dev/null | wc -l)"
+          screenshot_count=$(find "$SCREENSHOT_DIR" -name "*.png" 2>/dev/null | wc -l)
+          echo "Total screenshots: $screenshot_count"
           echo "RustDesk running: $(pgrep -f "RustDesk" > /dev/null && echo "Yes" || echo "No")"
 
       - name: Upload Final Status
@@ -422,12 +421,19 @@ jobs:
           
           # Final screenshot
           final_file="$SCREENSHOT_DIR/final_complete_$(date +%H%M%S).png"
-          screencapture -x "$final_file" 2>/dev/null && echo "✅ Final screenshot taken" || echo "⚠️ Could not take final screenshot"
+          if screencapture -x "$final_file" 2>/dev/null; then
+            echo "✅ Final screenshot taken"
+          else
+            echo "⚠️ Could not take final screenshot"
+          fi
           
           # Stop RustDesk
           pkill -f "RustDesk" 2>/dev/null || true
           sleep 2
           
+          # Count total screenshots
+          screenshot_count=$(find "$SCREENSHOT_DIR" -name "*.png" 2>/dev/null | wc -l)
+          
           echo "✅ Cleanup complete"
           echo "Total workflow time: ~25 minutes"
-          echo "Total screenshots captured: $(find "$SCREENSHOT_DIR" -name "*.png" 2>/dev/null | wc -l)"
+          echo "Total screenshots captured: $screenshot_count"
