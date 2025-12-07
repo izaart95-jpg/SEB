@@ -195,17 +195,17 @@ jobs:
           
           echo "✅ All click methods attempted"
 
-      - name: Take Verification Screenshots
+      - name: Take Verification Screenshots (Reduced to 2)
         run: |
-          echo "=== Taking Verification Screenshots ==="
+          echo "=== Taking Verification Screenshots (2 Only) ==="
           
           # Wait a bit for RustDesk to initialize
           sleep 5
           
-          # Take 5 verification screenshots
-          for i in {1..5}; do
+          # Take 2 verification screenshots (reduced from 5)
+          for i in {1..2}; do
             echo ""
-            echo "📸 Taking verification screenshot $i/5..."
+            echo "📸 Taking verification screenshot $i/2..."
             
             timestamp=$(date +%Y%m%d_%H%M%S)
             filepath="$SCREENSHOT_DIR/verification_${i}_${timestamp}.png"
@@ -219,7 +219,7 @@ jobs:
               echo "⚠️ Failed to take screenshot $i"
             fi
             
-            if [ $i -lt 5 ]; then
+            if [ $i -lt 2 ]; then
               echo "   Waiting 2 seconds..."
               sleep 2
             fi
@@ -235,7 +235,7 @@ jobs:
           echo "=== Performing Additional UI Clicks ==="
           
           # Calculate scaled coordinates for your requested clicks
-          # Original coordinates at 1024x768: (210, 563), (542, 293), and (820, 316)
+          # Original coordinates at 1024x768: (210, 563), (542, 293), (820, 316), and (828, 313)
           
           ORIGINAL_WIDTH=1024
           ORIGINAL_HEIGHT=768
@@ -252,6 +252,10 @@ jobs:
           ORIG_X3=820
           ORIG_Y3=316
           
+          # Fourth click coordinates
+          ORIG_X4=828
+          ORIG_Y4=313
+          
           # Calculate scaling factors
           X_SCALE=$(echo "scale=2; $SCREEN_WIDTH / $ORIGINAL_WIDTH" | bc)
           Y_SCALE=$(echo "scale=2; $SCREEN_HEIGHT / $ORIGINAL_HEIGHT" | bc)
@@ -263,16 +267,20 @@ jobs:
           SCALED_Y2=$(echo "$ORIG_Y2 * $Y_SCALE" | bc | awk '{printf "%.0f", $1}')
           SCALED_X3=$(echo "$ORIG_X3 * $X_SCALE" | bc | awk '{printf "%.0f", $1}')
           SCALED_Y3=$(echo "$ORIG_Y3 * $Y_SCALE" | bc | awk '{printf "%.0f", $1}')
+          SCALED_X4=$(echo "$ORIG_X4 * $X_SCALE" | bc | awk '{printf "%.0f", $1}')
+          SCALED_Y4=$(echo "$ORIG_Y4 * $Y_SCALE" | bc | awk '{printf "%.0f", $1}')
           
           echo "Original coordinates at ${ORIGINAL_WIDTH}x${ORIGINAL_HEIGHT}:"
           echo "  Click 1: ($ORIG_X1, $ORIG_Y1)"
           echo "  Click 2: ($ORIG_X2, $ORIG_Y2)"
           echo "  Click 3: ($ORIG_X3, $ORIG_Y3)"
+          echo "  Click 4: ($ORIG_X4, $ORIG_Y4)"
           echo ""
           echo "Scaled coordinates at ${SCREEN_WIDTH}x${SCREEN_HEIGHT}:"
           echo "  Click 1: ($SCALED_X1, $SCALED_Y1)"
           echo "  Click 2: ($SCALED_X2, $SCALED_Y2)"
           echo "  Click 3: ($SCALED_X3, $SCALED_Y3)"
+          echo "  Click 4: ($SCALED_X4, $SCALED_Y4)"
           
           echo "SCALED_X1=$SCALED_X1" >> $GITHUB_ENV
           echo "SCALED_Y1=$SCALED_Y1" >> $GITHUB_ENV
@@ -280,6 +288,8 @@ jobs:
           echo "SCALED_Y2=$SCALED_Y2" >> $GITHUB_ENV
           echo "SCALED_X3=$SCALED_X3" >> $GITHUB_ENV
           echo "SCALED_Y3=$SCALED_Y3" >> $GITHUB_ENV
+          echo "SCALED_X4=$SCALED_X4" >> $GITHUB_ENV
+          echo "SCALED_Y4=$SCALED_Y4" >> $GITHUB_ENV
           
           # Ensure cliclick is installed
           if ! command -v cliclick &> /dev/null; then
@@ -312,6 +322,16 @@ jobs:
           echo "🔘 Performing third click at ($SCALED_X3, $SCALED_Y3)..."
           cliclick c:$SCALED_X3,$SCALED_Y3
           echo "✅ Third click completed"
+          
+          # Wait 2 seconds
+          echo "⏳ Waiting 2 seconds..."
+          sleep 2
+          
+          # Perform fourth click at (828, 313) scaled
+          echo ""
+          echo "🔘 Performing fourth click at ($SCALED_X4, $SCALED_Y4)..."
+          cliclick c:$SCALED_X4,$SCALED_Y4
+          echo "✅ Fourth click completed"
           
           # Wait 2 seconds
           echo "⏳ Waiting 2 seconds..."
@@ -358,6 +378,7 @@ jobs:
           echo "Additional click 1 at: ($SCALED_X1, $SCALED_Y1)" >> "$STATUS_FILE"
           echo "Additional click 2 at: ($SCALED_X2, $SCALED_Y2)" >> "$STATUS_FILE"
           echo "Additional click 3 at: ($SCALED_X3, $SCALED_Y3)" >> "$STATUS_FILE"
+          echo "Additional click 4 at: ($SCALED_X4, $SCALED_Y4)" >> "$STATUS_FILE"
           echo "Start time: $(date)" >> "$STATUS_FILE"
           echo "" >> "$STATUS_FILE"
           
