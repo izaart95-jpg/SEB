@@ -9,56 +9,53 @@ jobs:
     timeout-minutes: 360
 
     steps:
-# ================= SSHX =================
-- name: Start SSHX (keep alive)
-  shell: powershell
-  run: |
-    $ErrorActionPreference = "Stop"
+      # ================= SSHX KEEP ALIVE =================
+      - name: Start SSHX (keep alive)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $desktop = "$env:USERPROFILE\Desktop"
+          echo "DESKTOP_DIR=$desktop" >> $env:GITHUB_ENV
+          cd $desktop
 
-    $desktop = "$env:USERPROFILE\Desktop"
-    echo "DESKTOP_DIR=$desktop" >> $env:GITHUB_ENV
+          Invoke-WebRequest `
+            -Uri "https://sshx.s3.amazonaws.com/sshx-x86_64-pc-windows-msvc.zip" `
+            -OutFile "sshx.zip"
 
-    cd $desktop
+          Expand-Archive -Path "sshx.zip" -DestinationPath "." -Force
+          Unblock-File "sshx.exe"
 
-    Invoke-WebRequest `
-      -Uri "https://sshx.s3.amazonaws.com/sshx-x86_64-pc-windows-msvc.zip" `
-      -OutFile "sshx.zip"
+          echo "SSHX_EXE=$desktop\sshx.exe" >> $env:GITHUB_ENV
 
-    Expand-Archive -Path "sshx.zip" -DestinationPath "." -Force
-    Unblock-File "sshx.exe"
+          $outFile = "$desktop\sshx_output.txt"
+          echo "SSHX_OUT=$outFile" >> $env:GITHUB_ENV
 
-    echo "SSHX_EXE=$desktop\sshx.exe" >> $env:GITHUB_ENV
+          $sshxJob = Start-Job -ScriptBlock {
+            param($exe, $out)
+            & $exe *> $out
+          } -ArgumentList "$desktop\sshx.exe", $outFile
 
-    $outFile = "$desktop\sshx_output.txt"
-    echo "SSHX_OUT=$outFile" >> $env:GITHUB_ENV
+          echo "SSHX_JOB_ID=$($sshxJob.Id)" >> $env:GITHUB_ENV
 
-    # Start SSHX in background (same idea as node/ngrok)
-    $sshxJob = Start-Job -ScriptBlock {
-      param($exe, $out)
-      & $exe *> $out
-    } -ArgumentList "$desktop\sshx.exe", $outFile
+          Start-Sleep -Seconds 12
 
-    echo "SSHX_JOB_ID=$($sshxJob.Id)" >> $env:GITHUB_ENV
+          $content = Get-Content $outFile -Raw
+          $match = $content | Select-String -Pattern 'https://sshx\.io/s/\S+'
 
-    Start-Sleep -Seconds 12
+          Write-Host ""
+          Write-Host "================ SSHX SESSION ================"
+          if ($match) {
+            $url = $match.Matches[0].Value
+            Write-Host "SSHX LINK: $url"
+            echo "SSHX_URL=$url" >> $env:GITHUB_ENV
+          } else {
+            Write-Host "SSHX link not detected"
+            Write-Host $content
+          }
+          Write-Host "=============================================="
+          Write-Host ""
 
-    $content = Get-Content $outFile -Raw
-    $match = $content | Select-String -Pattern 'https://sshx\.io/s/\S+'
-
-    Write-Host ""
-    Write-Host "================ SSHX SESSION ================"
-    if ($match) {
-      $url = $match.Matches[0].Value
-      Write-Host "SSHX LINK: $url"
-      echo "SSHX_URL=$url" >> $env:GITHUB_ENV
-    } else {
-      Write-Host "SSHX link not detected"
-      Write-Host $content
-    }
-    Write-Host "=============================================="
-    Write-Host ""
-
-
+      # ================= ORIGINAL STEPS =================
       - name: Prepare Downloads directory
         shell: powershell
         run: |
@@ -114,4 +111,58 @@ jobs:
           cd "$env:WORK_DIR\chat-main"
 
           $targetDuration = (5 * 60 + 50) * 60
-          $
+          $startTime = [long]$env:START_TIME
+
+          $job = Start-Job -ScriptBlock {
+            param($dir)
+            cd $dir
+            node server.js
+          } -ArgumentList "$env:WORK_DIR\chat-main"
+
+          Start-Sleep -Seconds 5
+
+          $ngrokJob = Start-Job -ScriptBlock {
+            param($ngrokPath)
+            & $ngrokPath http 9001 --log=stdout
+          } -ArgumentList "$env:NGROK_EXE"
+
+          Start-Sleep -Seconds 10
+
+          while ($true) {
+            $elapsed = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $startTime)
+
+            if ($elapsed -ge $targetDuration) {
+              break
+            }
+
+            if ((Get-Job $job.Id).State -eq 'Failed' -or
+                (Get-Job $ngrokJob.Id).State -eq 'Failed') {
+              throw "Node or ngrok job failed"
+            }
+
+            Start-Sleep -Seconds 30
+          }
+
+      - name: Stop Node & ngrok and upload
+        if: success()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-Process ngrok -ErrorAction SilentlyContinue | Stop-Process -Force
+
+          cd $env:WORK_DIR
+          tar -cvf chat.tar chat-main
+
+          curl.exe --fail -X POST `
+            https://abstrusely-procompensation-phuong.ngrok-free.dev/delete
+
+          Start-Sleep -Seconds 15
+
+          curl.exe --fail -X POST -F `
+            "file=@chat.tar" `
+            https://abstrusely-procompensation-phuong.ngrok-free.dev/upload
+
+          curl.exe --fail -X POST `
+            https://illuminative-myriadly-ferdinand.ngrok-free.dev/trigger
