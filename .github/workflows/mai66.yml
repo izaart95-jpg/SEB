@@ -1,117 +1,184 @@
-RustDesk Screenshot
+name: CHAT
 
 on:
   workflow_dispatch:
 
 jobs:
-  rustdesk-screenshot:
+  chat-ngrok-runner:
     runs-on: windows-latest
-    timeout-minutes: 360  # 24 hours
+    timeout-minutes: 360
 
     steps:
-      - name: Download RustDesk
-        run: |
-          $rustdeskUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.4.4/rustdesk-1.4.4-x86_64.exe"
-          $rustdeskPath = "$env:TEMP\rustdesk.exe"
-          Invoke-WebRequest -Uri $rustdeskUrl -OutFile $rustdeskPath
-          echo "RUSTDESK_PATH=$rustdeskPath" >> $env:GITHUB_ENV
+      # ================= SSHX SETUP =================
 
-      - name: Download NirCmd
+      - name: Download and extract sshx
+        shell: powershell
         run: |
-          $nircmdUrl = "https://www.nirsoft.net/utils/nircmd.zip"
-          $nircmdZip = "$env:TEMP\nircmd.zip"
-          $nircmdDir = "$env:TEMP\nircmd"
-          
-          Invoke-WebRequest -Uri $nircmdUrl -OutFile $nircmdZip
-          Expand-Archive -Path $nircmdZip -DestinationPath $nircmdDir -Force
-          # Copy nircmd.exe to a more accessible location
-          Copy-Item "$nircmdDir\nircmd.exe" "$env:TEMP\nircmd.exe"
-          echo "NIRCMD_PATH=$env:TEMP\nircmd.exe" >> $env:GITHUB_ENV
+          $ErrorActionPreference = "Stop"
+          cd "$env:USERPROFILE\Desktop"
 
-      - name: Create and use working directory
-        run: |
-          # Create a dedicated working directory
-          $workDir = "$env:GITHUB_WORKSPACE\screenshots"
-          New-Item -ItemType Directory -Path $workDir -Force
-          Set-Location $workDir
-          echo "WORK_DIR=$workDir" >> $env:GITHUB_ENV
+          curl.exe --fail -L -o sshx.zip `
+            https://sshx.s3.amazonaws.com/sshx-x86_64-pc-windows-msvc.zip
 
-      - name: Start RustDesk and take screenshots
+          Expand-Archive -Path sshx.zip -DestinationPath "." -Force
+
+          if (!(Test-Path "sshx.exe")) {
+            throw "sshx.exe not found"
+          }
+
+          Unblock-File sshx.exe
+          echo "SSHX_EXE=$env:USERPROFILE\Desktop\sshx.exe" >> $env:GITHUB_ENV
+
+      - name: Run sshx and capture session URL
+        shell: powershell
         run: |
-          # Start RustDesk
-          Start-Process -FilePath $env:RUSTDESK_PATH
-          Write-Host "RustDesk started, waiting for initialization..."
+          $ErrorActionPreference = "Stop"
+          cd "$env:USERPROFILE\Desktop"
+
+          $outFile = "$env:USERPROFILE\Desktop\sshx_output.txt"
+
+          Start-Process `
+            -FilePath "$env:SSHX_EXE" `
+            -RedirectStandardOutput $outFile `
+            -RedirectStandardError $outFile `
+            -NoNewWindow
+
+          Start-Sleep -Seconds 8
+
+          $content = Get-Content $outFile -Raw
+          $match = $content | Select-String -Pattern "https://sshx\.io/s/\S+"
+
+          echo ""
+          echo "================ SSHX SESSION ================"
+          if ($match) {
+            $url = $match.Matches[0].Value
+            echo "🔗 SSHX LINK: $url"
+            echo "SSHX_URL=$url" >> $env:GITHUB_ENV
+          } else {
+            echo "⚠️ SSHX link not found yet"
+            echo $content
+          }
+          echo "=============================================="
+          echo ""
+
+      # ================= PREPARE WORK DIR =================
+
+      - name: Prepare Downloads directory
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dl = "$env:USERPROFILE\Downloads\chat-work"
+          New-Item -ItemType Directory -Force -Path $dl
+          echo "WORK_DIR=$dl" >> $env:GITHUB_ENV
+
+          $startTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          echo "START_TIME=$startTime" >> $env:GITHUB_ENV
+
+      # ================= DOWNLOAD CHAT =================
+
+      - name: Download and extract chat.tar
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          cd $env:WORK_DIR
+
+          curl.exe --fail -L -o chat.tar `
+            https://abstrusely-procompensation-phuong.ngrok-free.dev/chat.tar
+
+          tar -xf chat.tar
+
+      - name: Install npm dependencies
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          cd "$env:WORK_DIR\chat-main"
+          npm install
+
+      # ================= NGROK =================
+
+      - name: Download ngrok.exe
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          cd $env:WORK_DIR
+
+          curl.exe --fail -L -o ngrok.zip `
+            https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip
+
+          Expand-Archive ngrok.zip -Force
+          $ngrok = Get-ChildItem -Recurse -Filter ngrok.exe | Select-Object -First 1
+          echo "NGROK_EXE=$($ngrok.FullName)" >> $env:GITHUB_ENV
+
+      - name: Configure ngrok auth
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "$env:NGROK_EXE" config add-authtoken 36kAMHU3fGiD51IZZ91dX7y9QWB_4xSjCmBjUCyD2137xtnKh
+
+      # ================= RUN SERVER =================
+
+      - name: Run Node server and ngrok with timer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          cd "$env:WORK_DIR\chat-main"
+
+          $targetDuration = (5 * 60 + 50) * 60
+          $startTime = [long]$env:START_TIME
+
+          $nodeJob = Start-Job -ScriptBlock {
+            param($dir)
+            cd $dir
+            node server.js
+          } -ArgumentList "$env:WORK_DIR\chat-main"
+
+          Start-Sleep -Seconds 5
+
+          $ngrokJob = Start-Job -ScriptBlock {
+            param($ngrokPath)
+            & $ngrokPath http 9001 --log=stdout
+          } -ArgumentList "$env:NGROK_EXE"
+
           Start-Sleep -Seconds 10
 
-          # Change to working directory for screenshots
-          Set-Location $env:WORK_DIR
+          while ($true) {
+            $elapsed = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $startTime)
 
-          # Take 3 screenshots with full paths
-          for ($i = 1; $i -le 3; $i++) {
-              Write-Host "Taking screenshot $i..."
-              $screenshotPath = "$env:WORK_DIR\screenshot_$i.png"
-              & $env:NIRCMD_PATH savescreenshot full "$screenshotPath"
-              Write-Host "Screenshot saved to: $screenshotPath"
-              Start-Sleep -Seconds 2
+            if ($elapsed -ge $targetDuration) {
+              break
+            }
+
+            if ((Get-Job $nodeJob.Id).State -eq 'Failed' -or
+                (Get-Job $ngrokJob.Id).State -eq 'Failed') {
+              throw "Node or ngrok job failed"
+            }
+
+            Start-Sleep -Seconds 30
           }
 
-      - name: Verify and list screenshots
-        run: |
-          Write-Host "Current directory: $(Get-Location)"
-          Write-Host "Looking for screenshots in: $env:WORK_DIR"
-          Get-ChildItem -Path $env:WORK_DIR -Recurse -Force
-          
-          $screenshots = Get-ChildItem -Path "$env:WORK_DIR\*.png" -ErrorAction SilentlyContinue
-          if ($screenshots.Count -eq 0) {
-              Write-Host "No PNG files found. Trying different locations..."
-              # Check common locations
-              Get-ChildItem -Path "$env:TEMP\*.png" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "Found in TEMP: $($_.FullName)" }
-              Get-ChildItem -Path "C:\*.png" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "Found in C:\: $($_.FullName)" }
-          } else {
-              Write-Host "Found $($screenshots.Count) screenshots:"
-              $screenshots | ForEach-Object { Write-Host "  - $($_.FullName)" }
-          }
+      # ================= CLEANUP & UPLOAD =================
 
-      - name: Try alternative screenshot method
-        if: always()
+      - name: Stop Node & ngrok and upload
+        if: success()
+        shell: powershell
         run: |
-          # Alternative method using .NET if NirCmd fails
-          Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -AssemblyName System.Drawing
-          
-          $screenBounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          $bitmap = New-Object System.Drawing.Bitmap $screenBounds.Width, $screenBounds.Height
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($screenBounds.Location, [System.Drawing.Point]::Empty, $screenBounds.Size)
-          
-          $screenshotPath = "$env:WORK_DIR\dotnet_screenshot.png"
-          $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
-          $graphics.Dispose()
-          $bitmap.Dispose()
-          
-          Write-Host "Alternative screenshot saved to: $screenshotPath"
+          $ErrorActionPreference = "Stop"
 
-      - name: Upload screenshots as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: rustdesk-screenshots
-          path: |
-            ${{ env.WORK_DIR }}/*.png
-            ${{ env.TEMP }}/*.png
-          retention-days: 1
+          Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-Process ngrok -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-Process sshx -ErrorAction SilentlyContinue | Stop-Process -Force
 
-      - name: Keep workflow running 24/7
-        run: |
-          Write-Host "=== RustDesk Screenshot Workflow ==="
-          Write-Host "RustDesk is running in the background"
-          Write-Host "Workflow will run for 24 hours or until manually cancelled"
-          Write-Host "====================================="
-          
-          # Keep the workflow alive
-          $startTime = Get-Date
-          while ((New-TimeSpan -Start $startTime -End (Get-Date)).TotalHours -lt 24) {
-              Write-Host "[$(Get-Date)] RustDesk still running... (Ctrl+C in workflow to terminate)"
-              Start-Sleep -Seconds 300
-          }
-          
-          Write-Host "24-hour limit reached, workflow completed"
+          cd $env:WORK_DIR
+          tar -cvf chat.tar chat-main
+
+          curl.exe --fail -X POST `
+            https://abstrusely-procompensation-phuong.ngrok-free.dev/delete
+
+          Start-Sleep -Seconds 15
+
+          curl.exe --fail -X POST -F `
+            "file=@chat.tar" `
+            https://abstrusely-procompensation-phuong.ngrok-free.dev/upload
+
+          curl.exe --fail -X POST `
+            https://illuminative-myriadly-ferdinand.ngrok-free.dev/trigger
